@@ -37,19 +37,24 @@ type Shadow struct {
 
 
 func LoadAverage(Label string) (Check, error) {
-
 	loadavg := Check{}
-
-	data, err := ioutil.ReadFile("/proc/loadavg")
-	if err != nil {
-		return loadavg, err
-	}
 
 	now := time.Now()
 	current_time := time.Now().Local()
 
 	epoch := now.Unix()
 	t := current_time.Format("Jan 02 2006 03:04:05")
+
+	data, err := ioutil.ReadFile("/proc/loadavg")
+	if err != nil {
+		loadavg.ConfigLabel = Label
+		loadavg.TimeStamp = t
+		loadavg.EpochTime = epoch
+		loadavg.Output = "error reading /proc/loadavg: " + err.Error() 
+		loadavg.Retval = 1
+
+		return loadavg, err
+	}
 
 	loadavg.ConfigLabel = Label
 	loadavg.TimeStamp = t
@@ -61,20 +66,25 @@ func LoadAverage(Label string) (Check, error) {
 }
 
 func MemUsage(Label string) (Check, error) {
-	
 	memusage := Check{}
-	
-	data, err := linuxproc.ReadMemInfo("/proc/meminfo")
-	if err != nil {
-		return memusage, err
-	}
 
-        now := time.Now()
+	now := time.Now()
         current_time := time.Now().Local()
 
         epoch := now.Unix()
         t := current_time.Format("Jan 02 2006 03:04:05")
 
+
+	data, err := linuxproc.ReadMemInfo("/proc/meminfo")
+	if err != nil {
+		memusage.ConfigLabel = Label
+		memusage.TimeStamp = t
+		memusage.EpochTime = epoch
+		memusage.Output = "error reading /proc/meminfo: " + err.Error() 
+		memusage.Retval = 1
+
+		return memusage, err
+	}
 
 	memused := data.MemTotal - data.MemAvailable
 	musedperc := float64((float64(memused) / float64(data.MemTotal)) * 100)
@@ -91,13 +101,6 @@ func MemUsage(Label string) (Check, error) {
 
 func CheckDiskUsage(Label string, Path string) (Check, error) {
 	disk := Check{}
-
-/*
-	d, err := linuxproc.ReadDisk(Path)
-	if err != nil {
-		return disk, err
-	}
-*/
 
 	var stat syscall.Statfs_t
 	syscall.Statfs(Path, &stat)	
@@ -122,7 +125,6 @@ func CheckDiskUsage(Label string, Path string) (Check, error) {
 	strinodefree := strconv.FormatUint(inodefree, 10)
 	strinodeused := strconv.FormatUint(inodeused, 10)
 
-
 	now := time.Now()
 	current_time := time.Now().Local()
 
@@ -143,12 +145,25 @@ func CheckPassword(Label string, User string) (Check, error) {
 	user := Check{}
 	shadow := Shadow{}
 
+	now := time.Now()
+	current_time := time.Now().Local()
+
+	epoch := now.Unix()
+	t := current_time.Format("Jan 02 2006 03:04:05")
+
 
 	file, err := os.Open("/etc/shadow")
 	if err != nil {
+		user.ConfigLabel = Label
+		user.TimeStamp = t
+		user.EpochTime = epoch
+		user.Output = "error reading /etc/shadow: " + err.Error() 
+		user.Retval = 1
+
 		return user, err
 	}
 	defer file.Close()
+
 
 	flag := false
 	scanner := bufio.NewScanner(file)
@@ -189,11 +204,6 @@ func CheckPassword(Label string, User string) (Check, error) {
 		expires = strconv.Itoa(iexpires)
 	}
 
-	now := time.Now()
-	current_time := time.Now().Local()
-
-	epoch := now.Unix()
-	t := current_time.Format("Jan 02 2006 03:04:05")
 
 	user.ConfigLabel = Label
 	user.TimeStamp = t
@@ -247,17 +257,22 @@ func CheckSSH(Label string) (Check, error) {
 
 func CheckSwap(Label string) (Check, error) {
 	swapusage := Check{}
-	
-	data, err := linuxproc.ReadMemInfo("/proc/meminfo")
-	if err != nil {
-		return swapusage, err
-	}
 
-        now := time.Now()
+	now := time.Now()
         current_time := time.Now().Local()
 
         epoch := now.Unix()
         t := current_time.Format("Jan 02 2006 03:04:05")
+
+	data, err := linuxproc.ReadMemInfo("/proc/meminfo")
+	if err != nil {
+		swapusage.ConfigLabel = Label
+		swapusage.TimeStamp = t
+		swapusage.EpochTime = epoch
+		swapusage.Output = "error reading /proc/meminfo: " + err.Error()
+		swapusage.Retval = 1
+		return swapusage, err
+	}
 
 	swapused := data.SwapTotal - data.SwapFree
 	swpusedperc := float64((float64(swapused) / float64(data.SwapTotal)) * 100)
@@ -275,18 +290,25 @@ func CheckSwap(Label string) (Check, error) {
 func CheckNTPSkew(Label string, Server string) (Check, error) {
 	ntpskew := Check{}
 
-        response, err := ntp.Query(Server)
-        if err != nil {
-		return ntpskew, err
-        }
-
-        offset := response.ClockOffset.String() 
-
         now := time.Now()
         current_time := time.Now().Local()
 
         epoch := now.Unix()
         t := current_time.Format("Jan 02 2006 03:04:05")
+
+        response, err := ntp.Query(Server)
+        if err != nil {
+		ntpskew.ConfigLabel = Label
+		ntpskew.TimeStamp = t
+		ntpskew.EpochTime = epoch
+		ntpskew.Output = "error querying ntp server: " + err.Error() 
+		ntpskew.Retval = 1
+	
+		return ntpskew, err
+        }
+
+        offset := response.ClockOffset.String() 
+
 
         ntpskew.ConfigLabel = Label
         ntpskew.TimeStamp = t
@@ -295,4 +317,42 @@ func CheckNTPSkew(Label string, Server string) (Check, error) {
 	ntpskew.Retval = 0
 
 	return ntpskew, nil
+}
+
+func CheckMailQ(Label string) (Check, error) {
+	check := Check{}
+
+        now := time.Now()
+        current_time := time.Now().Local()
+
+        epoch := now.Unix()
+        t := current_time.Format("Jan 02 2006 03:04:05")
+
+        _, err := os.Stat("/var/spool/clientmqueue/")
+        if os.IsNotExist(err) {
+		check.ConfigLabel = Label
+		check.TimeStamp = t
+		check.EpochTime = epoch
+		check.Output = "/var/spool/clientmqueue doesn't exist" 
+		check.Retval = 1
+		return check, err
+        }
+
+        files, err := ioutil.ReadDir("/var/spool/clientmqueue/")
+        if err != nil {
+		check.ConfigLabel = Label
+		check.TimeStamp = t
+		check.EpochTime = epoch
+		check.Output = "Can't read from /var/spool/clientmqueue/" + err.Error()
+		check.Retval = 1
+		return check, err
+        }
+
+        check.ConfigLabel = Label
+        check.TimeStamp = t
+        check.EpochTime = epoch
+	check.Output = strconv.Itoa(len(files)) 
+	check.Retval = 0
+
+	return check, nil
 }

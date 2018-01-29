@@ -106,6 +106,14 @@ func MakeSkel() error {
 	file.WriteString("Enabled: true\n")
 	file.Close()
 
+	file, err = os.OpenFile("/etc/heimdall/config.d/mailq.yml", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	file.WriteString("Label: MailQ Count\n")
+	file.WriteString("CommandType: internal\n")
+	file.WriteString("Command: CheckMailQ\n")
+	file.WriteString("CheckFreq: 60\n")
+	file.WriteString("Enabled: true\n")
+	file.Close()
+
 	return nil
 }
 
@@ -208,7 +216,7 @@ func Do_Checks(c *Config, chanl chan worker.Check) {
 	var check worker.Check
 
 	if c.CheckFreq < 1 {
-		c.CheckFreq = 10
+		c.CheckFreq = 60
 	}
 
 	for {
@@ -222,6 +230,8 @@ func Do_Checks(c *Config, chanl chan worker.Check) {
 				check, _ = worker.CheckSSH(c.Label)
 			} else if c.Command == "CheckSwap" {
 				check, _ = worker.CheckSwap(c.Label)
+			} else if c.Command == "CheckMailQ" {
+				check, _ = worker.CheckMailQ(c.Label)
 			} else if c.Command == "CheckDiskUsage" {
 				for _, dir := range c.Params {
 					check, _ = worker.CheckDiskUsage(c.Label, dir)
@@ -236,7 +246,21 @@ func Do_Checks(c *Config, chanl chan worker.Check) {
 				}
 			}
 		} else {
+			pth := externalpath + "/" + actnmsg.Action
+			_, err := os.Stat(pth)
+			if os.IsNotExist(err) {
+				Log("Can't Find External Utility: " + pth, 0)
+				return
+			}
 
+			out, err := exec.Command(pth).Output()
+			if err != nil {
+				Log("Error Running External Utility (" + pth + "): " + err.Error(), 0)
+				return
+			}
+
+			Log("Successfully Executed (" + pth + ")", 0)
+			Log("Output: " + string(out), 0)
 		}
 
 		chanl<-check
