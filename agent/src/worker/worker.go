@@ -10,6 +10,8 @@ import (
 	"strings"
 	linuxproc "github.com/c9s/goprocinfo/linux"
 	"github.com/drael/GOnetstat"
+        "github.com/beevik/ntp"
+
 )
 
 type Check struct {
@@ -148,11 +150,13 @@ func CheckPassword(Label string, User string) (Check, error) {
 	}
 	defer file.Close()
 
+	flag := false
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
 		parts := strings.Split(line, ":")
 		if parts[0] == User {
+			flag = true
 			shadow.Username = parts[0]
 
 			lchg, _ := strconv.Atoi(parts[2])
@@ -194,8 +198,14 @@ func CheckPassword(Label string, User string) (Check, error) {
 	user.ConfigLabel = Label
 	user.TimeStamp = t
 	user.EpochTime = epoch
-	user.Output = expires 
-	user.Retval = 0
+
+	if flag {
+		user.Output = expires 
+		user.Retval = 0
+	} else {
+		user.Output = "user doesn't exist"
+		user.Retval = 1
+	}
 
 	return user, nil	
 }
@@ -226,11 +236,11 @@ func CheckSSH(Label string) (Check, error) {
 
 	if flag {
 		ssh.Output = "SSH is up"
+		ssh.Retval = 0
 	} else {
 		ssh.Output = "SSH is DOWN"
+		ssh.Retval = 1
 	}
-
-	ssh.Retval = 0
 
 	return ssh, nil	
 }
@@ -260,5 +270,29 @@ func CheckSwap(Label string) (Check, error) {
 	swapusage.Retval = 0
 
 	return swapusage, nil
+}
 
+func CheckNTPSkew(Label string, Server string) (Check, error) {
+	ntpskew := Check{}
+
+        response, err := ntp.Query(Server)
+        if err != nil {
+		return ntpskew, err
+        }
+
+        offset := response.ClockOffset.String() 
+
+        now := time.Now()
+        current_time := time.Now().Local()
+
+        epoch := now.Unix()
+        t := current_time.Format("Jan 02 2006 03:04:05")
+
+        ntpskew.ConfigLabel = Label
+        ntpskew.TimeStamp = t
+        ntpskew.EpochTime = epoch
+	ntpskew.Output = offset 
+	ntpskew.Retval = 0
+
+	return ntpskew, nil
 }

@@ -97,6 +97,15 @@ func MakeSkel() error {
 	file.WriteString("Enabled: true\n")
 	file.Close()
 
+	file, err = os.OpenFile("/etc/heimdall/config.d/ntp.yml", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	file.WriteString("Label: NTP Skew\n")
+	file.WriteString("CommandType: internal\n")
+	file.WriteString("Command: CheckNTPSkew\n")
+	file.WriteString("CheckFreq: 60\n")
+	file.WriteString("Params: [\"pool.ntp.org\"]\n")
+	file.WriteString("Enabled: true\n")
+	file.Close()
+
 	return nil
 }
 
@@ -171,6 +180,30 @@ func handleChecks(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, string(jsn))
 }
 
+func handleCheckAndClear(w http.ResponseWriter, r *http.Request) {
+	jsn, _ := json.Marshal(checks)
+	fmt.Fprintf(w, string(jsn))
+	checks = nil
+}
+
+func handleStatusOf(w http.ResponseWriter, r *http.Request) {
+	retvals := []worker.Check{}
+	check := r.URL.Query().Get("service")
+	if len(check) == 0 {
+		fmt.Fprintf(w, "missing service to retrieve")
+		return
+	}
+
+	for _, chk := range checks {
+		if chk.ConfigLabel == check {
+			retvals = append(retvals, chk)
+		}
+	}
+
+	jsn, _ := json.Marshal(retvals)
+	fmt.Fprintf(w, string(jsn))
+}
+
 func Do_Checks(c *Config, chanl chan worker.Check) {
 	var check worker.Check
 
@@ -196,6 +229,10 @@ func Do_Checks(c *Config, chanl chan worker.Check) {
 			} else if c.Command == "CheckPassword" {
 				for _, user := range c.Params {
 					check, _ = worker.CheckPassword(c.Label, user)
+				}
+			} else if c.Command == "CheckNTPSkew" {
+				for _, ntpserver := range c.Params {
+					check, _ = worker.CheckNTPSkew(c.Label, ntpserver)
 				}
 			}
 		} else {
@@ -230,6 +267,8 @@ func main() {
 	router.HandleFunc("/whoareyou", handleWhoAreYou)
 	router.HandleFunc("/ping", handlePing)
 	router.HandleFunc("/checks", handleChecks)
+	router.HandleFunc("/checkandclear", handleCheckAndClear)
+	router.HandleFunc("/statusof", handleStatusOf)
 
 	err := http.ListenAndServe(":80", router)
 	if err != nil {
