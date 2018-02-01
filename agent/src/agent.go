@@ -246,21 +246,7 @@ func Do_Checks(c *Config, chanl chan worker.Check) {
 				}
 			}
 		} else {
-			pth := externalpath + "/" + actnmsg.Action
-			_, err := os.Stat(pth)
-			if os.IsNotExist(err) {
-				Log("Can't Find External Utility: " + pth, 0)
-				return
-			}
-
-			out, err := exec.Command(pth).Output()
-			if err != nil {
-				Log("Error Running External Utility (" + pth + "): " + err.Error(), 0)
-				return
-			}
-
-			Log("Successfully Executed (" + pth + ")", 0)
-			Log("Output: " + string(out), 0)
+			check, _ = worker.RunExternal(c.Label, c.Command)
 		}
 
 		chanl<-check

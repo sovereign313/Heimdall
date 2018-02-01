@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"strconv"
 	"os"
+	"os/exec"
 	"syscall"
 	"bufio"
 	"strings"
@@ -50,6 +51,7 @@ func LoadAverage(Label string) (Check, error) {
 		loadavg.ConfigLabel = Label
 		loadavg.TimeStamp = t
 		loadavg.EpochTime = epoch
+		loadavg.Command = "LoadAverage"
 		loadavg.Output = "error reading /proc/loadavg: " + err.Error() 
 		loadavg.Retval = 1
 
@@ -59,6 +61,7 @@ func LoadAverage(Label string) (Check, error) {
 	loadavg.ConfigLabel = Label
 	loadavg.TimeStamp = t
 	loadavg.EpochTime = epoch
+	loadavg.Command = "LoadAverage"
 	loadavg.Output = string(data)
 	loadavg.Retval = 0
 
@@ -80,6 +83,7 @@ func MemUsage(Label string) (Check, error) {
 		memusage.ConfigLabel = Label
 		memusage.TimeStamp = t
 		memusage.EpochTime = epoch
+		memusage.Command = "MemUsage"
 		memusage.Output = "error reading /proc/meminfo: " + err.Error() 
 		memusage.Retval = 1
 
@@ -93,6 +97,7 @@ func MemUsage(Label string) (Check, error) {
         memusage.ConfigLabel = Label
         memusage.TimeStamp = t
         memusage.EpochTime = epoch
+	memusage.Command = "MemUsage"
 	memusage.Output = strconv.FormatUint(memused, 10) + "/" + strconv.FormatUint(data.MemTotal, 10) + "/" + memusedperc + "%%"
 	memusage.Retval = 0
 
@@ -134,6 +139,7 @@ func CheckDiskUsage(Label string, Path string) (Check, error) {
 	disk.ConfigLabel = Path + " " + Label
 	disk.TimeStamp = t
 	disk.EpochTime = epoch
+	disk.Command = "CheckDiskUsage"
 	disk.Output = strdisktotal + "|" + strdiskused + "|" + strdiskfree + "|" + diskusedperc + "%%" + "|" + strinodetotal + "|" + strinodeused + "|" + strinodefree + "|" + inodeusedperc + "%%"  
 	disk.Retval = 0
 
@@ -157,6 +163,7 @@ func CheckPassword(Label string, User string) (Check, error) {
 		user.ConfigLabel = Label
 		user.TimeStamp = t
 		user.EpochTime = epoch
+		user.Command = "CheckPassword: [" + User + "]"
 		user.Output = "error reading /etc/shadow: " + err.Error() 
 		user.Retval = 1
 
@@ -208,6 +215,7 @@ func CheckPassword(Label string, User string) (Check, error) {
 	user.ConfigLabel = Label
 	user.TimeStamp = t
 	user.EpochTime = epoch
+	user.Command = "CheckPassword: [" + User + "]"
 
 	if flag {
 		user.Output = expires 
@@ -243,6 +251,7 @@ func CheckSSH(Label string) (Check, error) {
 	ssh.ConfigLabel =  Label
 	ssh.TimeStamp = t
 	ssh.EpochTime = epoch
+	ssh.Command = "CheckSSH"
 
 	if flag {
 		ssh.Output = "SSH is up"
@@ -269,6 +278,7 @@ func CheckSwap(Label string) (Check, error) {
 		swapusage.ConfigLabel = Label
 		swapusage.TimeStamp = t
 		swapusage.EpochTime = epoch
+		swapusage.Command = "CheckSwap"
 		swapusage.Output = "error reading /proc/meminfo: " + err.Error()
 		swapusage.Retval = 1
 		return swapusage, err
@@ -301,6 +311,7 @@ func CheckNTPSkew(Label string, Server string) (Check, error) {
 		ntpskew.ConfigLabel = Label
 		ntpskew.TimeStamp = t
 		ntpskew.EpochTime = epoch
+		ntpskew.Command = "CheckNTPSkew"
 		ntpskew.Output = "error querying ntp server: " + err.Error() 
 		ntpskew.Retval = 1
 	
@@ -313,6 +324,7 @@ func CheckNTPSkew(Label string, Server string) (Check, error) {
         ntpskew.ConfigLabel = Label
         ntpskew.TimeStamp = t
         ntpskew.EpochTime = epoch
+	ntpskew.Command = "CheckNTPSkew"
 	ntpskew.Output = offset 
 	ntpskew.Retval = 0
 
@@ -333,6 +345,7 @@ func CheckMailQ(Label string) (Check, error) {
 		check.ConfigLabel = Label
 		check.TimeStamp = t
 		check.EpochTime = epoch
+		check.Command = "CheckMailQ"
 		check.Output = "/var/spool/clientmqueue doesn't exist" 
 		check.Retval = 1
 		return check, err
@@ -343,6 +356,7 @@ func CheckMailQ(Label string) (Check, error) {
 		check.ConfigLabel = Label
 		check.TimeStamp = t
 		check.EpochTime = epoch
+		check.Command = "CheckMailQ"
 		check.Output = "Can't read from /var/spool/clientmqueue/" + err.Error()
 		check.Retval = 1
 		return check, err
@@ -351,7 +365,49 @@ func CheckMailQ(Label string) (Check, error) {
         check.ConfigLabel = Label
         check.TimeStamp = t
         check.EpochTime = epoch
+	check.Command = "CheckMailQ"
 	check.Output = strconv.Itoa(len(files)) 
+	check.Retval = 0
+
+	return check, nil
+}
+
+func RunExternal(Label string, pth string) (Check, error) {
+	check := Check{}
+
+        now := time.Now()
+        current_time := time.Now().Local()
+
+        epoch := now.Unix()
+        t := current_time.Format("Jan 02 2006 03:04:05")
+
+	_, err := os.Stat(pth)
+	if os.IsNotExist(err) {
+		check.ConfigLabel = Label
+		check.TimeStamp = t
+		check.EpochTime = epoch
+		check.Command = pth
+		check.Output = "can't find external utility: " + pth 
+		check.Retval = 1
+		return check, err
+	}
+
+	out, err := exec.Command(pth).Output()
+	if err != nil {
+		check.ConfigLabel = Label
+		check.TimeStamp = t
+		check.EpochTime = epoch
+		check.Command = pth
+		check.Output = "failed to run (" + pth + "):" + err.Error()
+		check.Retval = 1
+		return check, err
+	}
+
+        check.ConfigLabel = Label
+        check.TimeStamp = t
+        check.EpochTime = epoch
+	check.Command = pth
+	check.Output = "Success: " + string(out) 
 	check.Retval = 0
 
 	return check, nil
