@@ -249,6 +249,13 @@ func Do_Checks(c *Config, chanl chan worker.Check) {
 			check, _ = worker.RunExternal(c.Label, c.Command)
 		}
 
+		hstname, err := os.Hostname()
+		if err != nil {
+			check.Host = "Error Getting Hostname: " + err.Error()
+		} else {
+			check.Host = hstname
+		}
+
 		chanl<-check
 	}
 }

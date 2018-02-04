@@ -17,6 +17,7 @@ import (
 
 type Check struct {
         ConfigLabel string
+	Host string
         TimeStamp string
         EpochTime int64
         Command string
