@@ -287,7 +287,7 @@ func main() {
 	router.HandleFunc("/checkandclear", handleCheckAndClear)
 	router.HandleFunc("/statusof", handleStatusOf)
 
-	err := http.ListenAndServe(":80", router)
+	err := http.ListenAndServe(":9050", router)
 	if err != nil {
 		fmt.Println("ListenAndServe: ", err)
 	}

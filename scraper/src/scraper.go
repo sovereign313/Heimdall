@@ -1,37 +1,38 @@
 package main
 
 import (
-	"fmt"
-	"io/ioutil"
-	"net/http"
 	"encoding/json"
-	"os"
-	"time"
+	"fmt"
 	"github.com/gorilla/mux"
 	"gopkg.in/yaml.v2"
+	"io/ioutil"
+	"net/http"
+	"os"
+	"time"
 )
 
 type Config struct {
-	DefaultScrapeTime	int	   `yaml:"DefaultScrapeTime"`
-	Hosts []struct {
-		HostName string `yaml:"HostName"`
-		ScrapeTime int `yaml:"ScrapeTime"`
-		HostPaths []string `yaml:"HostPaths"`
-		Plugins []string `yaml:"Plugins"`
+	DefaultScrapeTime int `yaml:"DefaultScrapeTime"`
+	PluginPath string `yaml:"PluginPath"`
+	Hosts             []struct {
+		HostName   string   `yaml:"HostName"`
+		ScrapeTime int      `yaml:"ScrapeTime"`
+		HostPaths  []string `yaml:"HostPaths"`
+		Plugins    []string `yaml:"Plugins"`
+		FailurePlugins []string `yaml:"FailurePlugins"`
 	} `yaml:"Hosts"`
 
-	DefaultPlugins	[]string   `yaml:"DefaultPlugins"`
+	DefaultPlugins []string `yaml:"DefaultPlugins"`
 }
 
-
 type Check struct {
-        ConfigLabel string
-	Host string
-        TimeStamp string
-        EpochTime int64
-        Command string
-        Output string
-        Retval int
+	ConfigLabel string `json:"ConfigLabel"`
+	Host        string `json:"Host"`
+	TimeStamp   string `json:"TimeStamp"`
+	EpochTime   int64  `json:"Epochtime"`
+	Command     string `json:"Command"`
+	Output      string `json:"Output"`
+	Retval      int    `json:"Retval"`
 }
 
 var configs []Config
@@ -46,10 +47,12 @@ func MakeSkel() error {
 	file, err := os.OpenFile("/etc/heimdall/scraper.d/default.yml", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	file.WriteString("# Scrape Time If Not Defined In A Specific Host\n")
 	file.WriteString("DefaultScrapeTime: 600\n\n")
+	file.WriteString("# The Path To The Plugins (.so files)\n")
+	file.WriteString("PluginPath: ./plugins\n\n")
 	file.WriteString("# List Of Hosts To Check.\n")
 	file.WriteString("Hosts:\n")
 	file.WriteString("  # The Hostname/IP To Check\n")
-	file.WriteString("  - HostName: localhost\n\n")
+	file.WriteString("  - HostName: localhost:9050\n\n")
 	file.WriteString("    #   The Wait Timeout To Scrape This Specific Host\n")
 	file.WriteString("    ScrapeTime: 600\n\n")
 	file.WriteString("    #   The URL Path On The Server To Check (defaults to /checkandclear)\n")
@@ -59,6 +62,9 @@ func MakeSkel() error {
 	file.WriteString("    #   The Plugins To Run After Scraping This Host\n")
 	file.WriteString("    Plugins:\n")
 	file.WriteString("      - splunk\n\n")
+	file.WriteString("    # What To Run If Scraping Fails\n")
+	file.WriteString("    FailurePlugins:\n")
+	file.WriteString("      - alert\n\n")
 	file.WriteString("# The Plugins To Run If Not Specified In The Host Block\n")
 	file.WriteString("DefaultPlugins:\n")
 	file.WriteString("  - splunk\n")
@@ -165,7 +171,7 @@ func handleStatusOf(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, string(jsn))
 }
 
-func Do_Scrapes(c *Config, chanl chan Check) {
+func Do_Scrapes(c *Config) {
 	var check Check
 
 	if c.DefaultScrapeTime < 1 {
@@ -173,35 +179,51 @@ func Do_Scrapes(c *Config, chanl chan Check) {
 	}
 
 	for {
-		time.Sleep(time.Duration(c.DefaultScrapeTime) * time.Second)
 		for i := 0; i < len(c.Hosts); i++ {
-			//path := ""
+			if c.Hosts[i].ScrapeTime == 0 {
+				c.Hosts[i].ScrapeTime = c.DefaultScrapeTime
+			}
+
+			if len(c.Hosts[i].HostPaths) == 0 {
+				c.Hosts[i].HostPaths = append(c.Hosts[i].HostPaths, "/checkandclear")
+			}
+
+			time.Sleep(time.Duration(c.Hosts[i].ScrapeTime) * time.Second)
+
+			for _, hp := range c.Hosts[i].HostPaths {
+				resp, err := http.Get("http://" + c.Hosts[i].HostName + hp)
+				if err != nil {
+					now := time.Now()
+					current_time := time.Now().Local()
+					epoch := now.Unix()
+					t := current_time.Format("Jan 02 2006 03:04:05")
+
+					check.Host = c.Hosts[i].HostName
+					check.TimeStamp = t
+					check.EpochTime = epoch
+					check.Command = "scrape: " + c.Hosts[i].HostName + hp
+					check.Output = "failed to scrape: " + err.Error()
+					check.Retval = 1
+
+				} else {
+					var chk []Check
+					bytes, _ := ioutil.ReadAll(resp.Body)
+					json.Unmarshal(bytes, &chk)
+				}
+			}
 		}
-		chanl<-check
 	}
 }
 
 func main() {
 	GetConfigs()
 
-	go func() {
+	for i := 0; i < len(configs); i++ {
+		c := configs[i]
+		go Do_Scrapes(&c)
+	}
 
-		chanl := make(chan Check)
-		for i := 0; i < len(configs); i++ {
-			c := configs[i]
-			//if c.Enabled {
-				go Do_Scrapes(&c, chanl)
-		//	}
-		}
-
-		for {
-			tmp := <-chanl
-			checks = append(checks, tmp)
-		}
-		
-	}()
-
-	fmt.Println(configs)
+	fmt.Printf("%+v\n", configs)
 
 	router := mux.NewRouter()
 	router.HandleFunc("/whoareyou", handleWhoAreYou)
@@ -210,7 +232,7 @@ func main() {
 	router.HandleFunc("/checkandclear", handleCheckAndClear)
 	router.HandleFunc("/statusof", handleStatusOf)
 
-	err := http.ListenAndServe(":80", router)
+	err := http.ListenAndServe(":9051", router)
 	if err != nil {
 		fmt.Println("ListenAndServe: ", err)
 	}
