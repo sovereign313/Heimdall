@@ -9,16 +9,19 @@ import (
 	"net/http"
 	"os"
 	"time"
+	"path/filepath"
+	"plugin"
+	"errors"
 )
 
 type Config struct {
-	DefaultScrapeTime int `yaml:"DefaultScrapeTime"`
-	PluginPath string `yaml:"PluginPath"`
+	DefaultScrapeTime int    `yaml:"DefaultScrapeTime"`
+	PluginPath        string `yaml:"PluginPath"`
 	Hosts             []struct {
-		HostName   string   `yaml:"HostName"`
-		ScrapeTime int      `yaml:"ScrapeTime"`
-		HostPaths  []string `yaml:"HostPaths"`
-		Plugins    []string `yaml:"Plugins"`
+		HostName       string   `yaml:"HostName"`
+		ScrapeTime     int      `yaml:"ScrapeTime"`
+		HostPaths      []string `yaml:"HostPaths"`
+		Plugins        []string `yaml:"Plugins"`
 		FailurePlugins []string `yaml:"FailurePlugins"`
 	} `yaml:"Hosts"`
 
@@ -35,8 +38,16 @@ type Check struct {
 	Retval      int    `json:"Retval"`
 }
 
+type PluginList struct {
+        Name string
+        Version string
+        Function func(string, bool) (bool, error)
+}
+
 var configs []Config
 var checks []Check
+var plugins []PluginList
+
 
 func MakeSkel() error {
 	err := os.MkdirAll("/etc/heimdall/scraper.d/", 0644)
@@ -171,6 +182,86 @@ func handleStatusOf(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, string(jsn))
 }
 
+func LoadPlugins(plgpath string) error {
+        all_plugins, err := filepath.Glob(plgpath + "/*.so")
+        if err != nil {
+		Log("Error Getting Files From: " + plgpath + ": " + err.Error())
+		return err
+        }
+
+        for _, filename := range (all_plugins) {
+                p, err := plugin.Open(filename)
+                if err != nil {
+			return err
+                }
+
+                symbol, err := p.Lookup("Handle")
+		if err != nil {
+			Log("failed to look up Function: " + err.Error())
+			Log("Plugin Not Loaded: " + filename)
+			continue
+		}
+
+                nsymbol, err := p.Lookup("PluginName")
+		if err != nil {
+			Log("failed to look up Plugin Name: " + err.Error())
+			Log("Plugin Not Loaded: " + filename)
+			continue
+		}
+
+                vsymbol, err := p.Lookup("PluginVersion")
+                if err != nil {
+			Log("failed to look up Plugin Version: " + err.Error())
+			Log("Plugin Not Loaded: " + filename)
+			continue
+                }
+
+                plgname, ok := nsymbol.(*string)
+		if !ok {
+			Log("failed to load name symbol from: " + filename)
+			Log("Plugin Not Loaded")
+			continue
+		}
+
+                plgversion, ok := vsymbol.(*string)
+		if !ok {
+			Log("failed to load name symbol from: " + filename)
+			Log("Plugin Not Loaded")
+			continue
+		}
+
+                plgfunc, ok := symbol.(func(string, bool) (bool, error))
+                if !ok {
+			Log("failed to load name symbol from: " + filename)
+			Log("Plugin Not Loaded")
+			continue
+                }
+
+                tmpplg := PluginList{}
+                tmpplg.Name = *plgname
+                tmpplg.Version = *plgversion
+                tmpplg.Function = plgfunc
+
+		flag := false
+		for _, p := range plugins {
+			if p.Name == tmpplg.Name {
+				Log("Plugin Already Loaded: " + p.Name)
+				flag = true
+			}
+		}
+
+		if ! flag {
+	                plugins = append(plugins, tmpplg)
+		}
+        }
+
+	if len(plugins) < 1 {
+		return errors.New("No Plugins Loaded")
+	} else {
+		return nil
+	}
+}
+
 func Do_Scrapes(c *Config) {
 	var check Check
 
@@ -209,6 +300,19 @@ func Do_Scrapes(c *Config) {
 					var chk []Check
 					bytes, _ := ioutil.ReadAll(resp.Body)
 					json.Unmarshal(bytes, &chk)
+					psize := len(c.Hosts[i].Plugins)
+
+					if psize < 1 {
+
+					} else {
+						for _, hstplg := range c.Hosts[i].Plugins {
+							for _, p := range plugins {
+								if p.Name == hstplg {
+									_, _ = p.Function(string(bytes), true)
+								}
+							}
+						}
+					}
 				}
 			}
 		}
@@ -217,6 +321,9 @@ func Do_Scrapes(c *Config) {
 
 func main() {
 	GetConfigs()
+	for _, co := range configs {
+		LoadPlugins(co.PluginPath)
+	}
 
 	for i := 0; i < len(configs); i++ {
 		c := configs[i]
