@@ -15,6 +15,7 @@ import (
 )
 
 type Config struct {
+	AutoClear bool `yaml:"AutoClear"`
 	DefaultScrapeTime int    `yaml:"DefaultScrapeTime"`
 	PluginPath        string `yaml:"PluginPath"`
 	Hosts             []struct {
@@ -55,7 +56,15 @@ func MakeSkel() error {
 		return err
 	}
 
+	err = os.MkdirAll("/etc/heimdall/plugins.d/", 0644)
+	if err != nil {
+		return err
+	}
+
 	file, err := os.OpenFile("/etc/heimdall/scraper.d/default.yml", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	file.WriteString("# Automatically Clear Checks List When Processed?\n")
+	file.WriteString("# Set To \"false\" if this scraper is a sub-scraper node.\n")
+	file.WriteString("AutoClear: true\n\n")
 	file.WriteString("# Scrape Time If Not Defined In A Specific Host\n")
 	file.WriteString("DefaultScrapeTime: 600\n\n")
 	file.WriteString("# The Path To The Plugins (.so files)\n")
@@ -75,14 +84,35 @@ func MakeSkel() error {
 	file.WriteString("      - splunk\n\n")
 	file.WriteString("    # What To Run If Scraping Fails\n")
 	file.WriteString("    FailurePlugins:\n")
-	file.WriteString("      - alert\n\n")
+	file.WriteString("      - alert_smtp\n\n")
 	file.WriteString("# The Plugins To Run If Not Specified In The Host Block\n")
 	file.WriteString("DefaultPlugins:\n")
 	file.WriteString("  - splunk\n")
 	file.WriteString("  - rules\n")
 	file.WriteString("  - influxdb\n")
-
 	file.Close()
+
+	sfile, err := os.OpenFile("/etc/heimdall/plugins.d/splunk.yml", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	sfile.WriteString("# Host:Port Of Splunk Server To Send To\n")
+	sfile.WriteString("Host: splunkserver:5021\n")
+	sfile.Close()
+
+	rfile, err := os.OpenFile("/etc/heimdall/plugins.d/rules.yml", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	rfile.WriteString("# Host:Port Of Rules Server To Send To\n")
+	rfile.WriteString("Host: 127.0.0.1:8225\n")
+	rfile.Close()
+
+	ffile, err := os.OpenFile("/etc/heimdall/plugins.d/alert_smtp.yml", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	ffile.WriteString("# Who To Alert In The Event Of A Failed Scrape\n")
+	ffile.WriteString("AlertList:\n")
+	ffile.WriteString("  - someone@yourdomain.com\n\n")
+	ffile.WriteString("# Who The Email Should Come From\n")
+	ffile.WriteString("FromAddress: heimdall@yourdomain.com\n\n")
+	ffile.WriteString("# The Subject For The Failed Scrape Email\n")
+	ffile.WriteString("Subject: Failed To Scrape Host\n\n")
+	ffile.WriteString("# The SMTP Server You Want To Use As The MTA\n")
+	ffile.WriteString("SMTPServer: smtp.mydomain.com\n")
+	ffile.Close()
 
 	return nil
 }
@@ -92,7 +122,7 @@ func Log(message string) {
 	if err != nil {
 		fmt.Println("Failed To Open Log File: " + err.Error())
 	}
-	file.Close()
+	defer file.Close()
 
 	current_time := time.Now().Local()
 	t := current_time.Format("Jan 02 2006 03:04:05")
@@ -183,13 +213,21 @@ func handleStatusOf(w http.ResponseWriter, r *http.Request) {
 }
 
 func LoadPlugins(plgpath string) error {
+	_, er := os.Stat(plgpath)
+	if os.IsNotExist(er) {
+		Log("Plugin Path Doesn't Exist (" + plgpath + ")")
+		Log("No Plugins Loaded")
+		fmt.Println("No Plugins Loaded")
+		return er
+	}
+
         all_plugins, err := filepath.Glob(plgpath + "/*.so")
         if err != nil {
 		Log("Error Getting Files From: " + plgpath + ": " + err.Error())
 		return err
         }
 
-        for _, filename := range (all_plugins) {
+        for _, filename := range all_plugins {
                 p, err := plugin.Open(filename)
                 if err != nil {
 			return err
@@ -256,6 +294,8 @@ func LoadPlugins(plgpath string) error {
         }
 
 	if len(plugins) < 1 {
+		Log("No Plugins Loaded: Do .so files exist in: " + plgpath + "?")
+		fmt.Println("No Plugins Loaded: Do .so files exist in: " + plgpath + "?")
 		return errors.New("No Plugins Loaded")
 	} else {
 		return nil
@@ -295,6 +335,16 @@ func Do_Scrapes(c *Config) {
 					check.Command = "scrape: " + c.Hosts[i].HostName + hp
 					check.Output = "failed to scrape: " + err.Error()
 					check.Retval = 1
+					
+					bytes, _ := json.Marshal(check)
+
+					for _, failplg := range c.Hosts[i].FailurePlugins {
+						for _, p := range plugins {
+							if p.Name == failplg {
+								_, _ = p.Function(string(bytes), false)
+							}
+						}
+					}	
 
 				} else {
 					var chk []Check
@@ -329,8 +379,6 @@ func main() {
 		c := configs[i]
 		go Do_Scrapes(&c)
 	}
-
-	fmt.Printf("%+v\n", configs)
 
 	router := mux.NewRouter()
 	router.HandleFunc("/whoareyou", handleWhoAreYou)
