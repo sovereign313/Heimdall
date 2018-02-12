@@ -8,6 +8,8 @@ import (
         "gopkg.in/yaml.v2"
 	"io/ioutil"
 	"net/smtp"
+	"net"
+	"time"
 	"encoding/json"
 )
 
@@ -32,19 +34,22 @@ type Check struct {
 var config Config
 
 func SendSMTPMessage(mailserver string, from string, to []string, subject string, body string) error {
-	connection, err := smtp.Dial(mailserver)
+	connection, err := net.DialTimeout("tcp", mailserver, 10 * time.Second)
 	if err != nil {
 		return err
 	}
 	defer connection.Close()
 
-	connection.Mail(from)
+	host, _, _ := net.SplitHostPort(mailserver)
+	mail, err := smtp.NewClient(connection, host)
+
+	mail.Mail(from)
 
 	for _, addr := range to {
-		connection.Rcpt(addr)
+		mail.Rcpt(addr)
 	}
 
-	wc, err := connection.Data()
+	wc, err := mail.Data()
 	if err != nil {
 		return err
 	}
@@ -63,19 +68,19 @@ func SendSMTPMessage(mailserver string, from string, to []string, subject string
 	return nil
 }
 
-func Handle(check string, failed bool) (bool, error) {
+func Handle(check string, failed bool) (string, error) {
 
 	var chk Check
-	b, err := ioutil.ReadFile("/etc/heimdall/plugins.d/alert.yml")
+	b, err := ioutil.ReadFile("/etc/heimdall/plugins.d/alert_smtp.yml")
 	if err != nil {
-		return false, err
+		return "", err
 	}
 
 	yml := string(b)
 	err = yaml.Unmarshal([]byte(yml), &config)
 
 	if err != nil {
-		return false, err
+		return "", err
 	}
 
 	_ = json.Unmarshal([]byte(check), &chk)
@@ -89,16 +94,12 @@ func Handle(check string, failed bool) (bool, error) {
 
 	err = SendSMTPMessage(config.SMTPServer, config.FromAddress, config.AlertList, config.Subject, body)
 
-	fmt.Printf("%+v\n", config)
-	fmt.Println(check)
-	fmt.Println(body)
-
 	if err != nil {
 		fmt.Println("failed to send alert email")
-		return false, err		
+		return "", err		
 	}
 
-	return true, nil
+	return "success", nil
 
 }
 

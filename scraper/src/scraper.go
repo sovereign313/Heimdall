@@ -27,6 +27,7 @@ type Config struct {
 	} `yaml:"Hosts"`
 
 	DefaultPlugins []string `yaml:"DefaultPlugins"`
+	DefaultFailPlugins []string `yaml:"DefaultFailPlugins"`
 }
 
 type Check struct {
@@ -42,7 +43,7 @@ type Check struct {
 type PluginList struct {
         Name string
         Version string
-        Function func(string, bool) (bool, error)
+        Function func(string, bool) (string, error)
 }
 
 var configs []Config
@@ -81,15 +82,21 @@ func MakeSkel() error {
 	file.WriteString("      - /checkandclear\n\n")
 	file.WriteString("    #   The Plugins To Run After Scraping This Host\n")
 	file.WriteString("    Plugins:\n")
-	file.WriteString("      - splunk\n\n")
+	file.WriteString("      - Splunk\n\n")
 	file.WriteString("    # What To Run If Scraping Fails\n")
 	file.WriteString("    FailurePlugins:\n")
-	file.WriteString("      - alert_smtp\n\n")
+	file.WriteString("      - Alert_SMTP\n\n")
 	file.WriteString("# The Plugins To Run If Not Specified In The Host Block\n")
 	file.WriteString("DefaultPlugins:\n")
-	file.WriteString("  - splunk\n")
-	file.WriteString("  - rules\n")
-	file.WriteString("  - influxdb\n")
+	file.WriteString("  - Splunk\n")
+	file.WriteString("  - Rules\n")
+	file.WriteString("  - InfluxDB\n\n")
+	file.WriteString("# Plugins to run on failed scrape, if not overridden by\n")
+	file.WriteString("# Host Specific block\n")
+	file.WriteString("DefaultFailPlugins:\n")
+	file.WriteString("  - Alert_SMTP\n")
+	file.WriteString("  - Alert_SNS\n\n")
+
 	file.Close()
 
 	sfile, err := os.OpenFile("/etc/heimdall/plugins.d/splunk.yml", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -268,7 +275,7 @@ func LoadPlugins(plgpath string) error {
 			continue
 		}
 
-                plgfunc, ok := symbol.(func(string, bool) (bool, error))
+                plgfunc, ok := symbol.(func(string, bool) (string, error))
                 if !ok {
 			Log("failed to load name symbol from: " + filename)
 			Log("Plugin Not Loaded")
@@ -338,29 +345,98 @@ func Do_Scrapes(c *Config) {
 					
 					bytes, _ := json.Marshal(check)
 
-					for _, failplg := range c.Hosts[i].FailurePlugins {
-						for _, p := range plugins {
-							if p.Name == failplg {
-								_, _ = p.Function(string(bytes), false)
+					psize := len(c.Hosts[i].FailurePlugins)
+
+					if psize < 1 {
+						flag := false
+						for _, failplg := range c.DefaultFailPlugins {
+							for _, p := range plugins {
+								if p.Name == failplg {
+									flag = true
+									retval, err := p.Function(string(bytes), false)
+									if err != nil {
+										Log("Failed to execute (" + p.Name + "): " + err.Error())
+									} else {
+										Log("Successfully ran (" + p.Name + "): " + retval)
+									}
+								}
 							}
 						}
-					}	
 
+						if ! flag  {
+							Log("No Plugin Names Matching.  Check Config")
+						}
+					} else {
+						flag := false
+						for _, failplg := range c.Hosts[i].FailurePlugins {
+							for _, p := range plugins {
+								if p.Name == failplg {
+									flag = true
+									retval, err := p.Function(string(bytes), false)
+									if err != nil {
+										Log("Failed to execute ("+ p.Name + "): " + err.Error())
+									} else {
+										Log("Successfully ran (" + p.Name + "): " + retval)
+									}
+								}
+							}
+						}
+
+						if ! flag {
+							Log("No Plugin Names Matching.  Check Config")
+						}
+					}
 				} else {
+					defer resp.Body.Close()
 					var chk []Check
 					bytes, _ := ioutil.ReadAll(resp.Body)
 					json.Unmarshal(bytes, &chk)
 					psize := len(c.Hosts[i].Plugins)
 
+					// Everything worked, but agent had no data
+					if string(bytes) == "null" {
+						continue
+					}
+
 					if psize < 1 {
+						// Do Default Plugins
+						flag := false
+						for _, hstplg := range c.DefaultPlugins {
+							for _, p := range plugins {
+								if p.Name == hstplg {
+									flag = true
+									retval, err := p.Function(string(bytes), false)
+									if err != nil {
+										Log("Failed to execute ("+ p.Name + "): " + err.Error())
+									} else {
+										Log("Successfully ran (" + p.Name + "): " + retval)
+									}
+								}
+							}
+						}
+
+						if ! flag {
+							Log("No Plugin Names Matching.  Check Config")	
+						}
 
 					} else {
+						flag := false
 						for _, hstplg := range c.Hosts[i].Plugins {
 							for _, p := range plugins {
 								if p.Name == hstplg {
-									_, _ = p.Function(string(bytes), true)
+									flag = true
+									retval, err := p.Function(string(bytes), false)
+									if err != nil {
+										Log("Failed to execute ("+ p.Name + "): " + err.Error())
+									} else {
+										Log("Successfully ran (" + p.Name + "): " + retval)
+									}
 								}
 							}
+						}
+
+						if ! flag {
+							Log("No Plugin Names Matching.  Check Config")	
 						}
 					}
 				}
